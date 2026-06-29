@@ -54,3 +54,29 @@ def test_order_date_is_datetime(sample_csv):
     """order_date 列が文字列ではなく datetime 型として読み込まれること。"""
     df = read_orders_csv(sample_csv)
     assert pd.api.types.is_datetime64_any_dtype(df["order_date"])
+
+
+# --- STEP 4: 増分抽出テスト ---
+
+from datetime import date  # noqa: E402
+
+
+def test_since_filters_old_rows(sample_csv):
+    """since=2024-03-15 のとき、その日以前の行は含まれないこと。"""
+    # SAMPLE_CSV: ORD-00001=2024-03-15, ORD-00002=2024-05-10
+    df = read_orders_csv(sample_csv, since=date(2024, 3, 15))
+    # 2024-03-15 は「より新しい」に含まれないので ORD-00001 は除外される
+    assert len(df) == 1
+    assert df.iloc[0]["order_id"] == "ORD-00002"
+
+
+def test_since_none_returns_all_rows(sample_csv):
+    """since=None のとき全件返すこと。"""
+    df = read_orders_csv(sample_csv, since=None)
+    assert len(df) == 2
+
+
+def test_since_future_date_returns_empty(sample_csv):
+    """since に最新日より未来の日付を渡すと空の DataFrame が返ること。"""
+    df = read_orders_csv(sample_csv, since=date(2025, 1, 1))
+    assert df.empty

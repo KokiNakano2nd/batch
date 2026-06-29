@@ -9,8 +9,14 @@ __pycache__/
 # 環境変数
 .env
 
+# 生成データ（Faker で再生成可能）
+data/
+
 # Docker ボリューム
 postgres_data/
+
+# ツール設定（ローカル固有）
+.claude/settings.json
 
 # エディタ
 .vscode/
