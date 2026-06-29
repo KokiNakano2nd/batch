@@ -1,4 +1,8 @@
 services:
+
+  # -----------------------------------------------------------------------
+  # ETL データ用 PostgreSQL
+  # -----------------------------------------------------------------------
   postgres:
     image: postgres:16
     container_name: batch_postgres
@@ -10,6 +14,61 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - batch_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U batch_user -d batch_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------------
+  # Prefect サーバー（API + UI）
+  # SQLite をデータベースとして使用（ETL 用 PostgreSQL とは分離）
+  # -----------------------------------------------------------------------
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    container_name: batch_prefect_server
+    command: prefect server start --host 0.0.0.0
+    environment:
+      PREFECT_UI_API_URL: http://localhost:4200/api
+    ports:
+      - "4200:4200"
+    volumes:
+      - prefect_data:/root/.prefect
+    networks:
+      - batch_network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # -----------------------------------------------------------------------
+  # Prefect ワーカー（pipeline.py を実行するコンテナ）
+  # -----------------------------------------------------------------------
+  prefect-worker:
+    build: .
+    container_name: batch_prefect_worker
+    environment:
+      DATABASE_URL: postgresql://batch_user:batch_pass@postgres:5432/batch_db
+      PREFECT_API_URL: http://prefect-server:4200/api
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    volumes:
+      - ./data:/app/data
+    networks:
+      - batch_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      prefect-server:
+        condition: service_healthy
+
+networks:
+  batch_network:
+    name: batch_network
 
 volumes:
   postgres_data:
+  prefect_data:
