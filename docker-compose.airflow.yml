@@ -1,0 +1,116 @@
+# Airflow 学習環境（STEP 9-A）
+#
+# 起動:  docker compose -f docker-compose.airflow.yml up -d
+# 停止:  docker compose -f docker-compose.airflow.yml down
+#
+# UI:    http://localhost:8080  (admin / admin)
+# ETL DB は STEP 8 の batch_postgres（batch_network 経由）を共用する。
+# そのため docker-compose.yml を先に起動しておくこと。
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.10.0
+  environment:
+    # Airflow 自身のメタデータ DB（このファイル内の airflow-postgres を使用）
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: "46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLt0nfdstY="
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__SECRET_KEY: "batch-etl-secret"
+    # ETL 用 DB（STEP 8 の batch_postgres）
+    DATABASE_URL: postgresql://batch_user:batch_pass@batch_postgres:5432/batch_db
+    # プロジェクトコードを import できるようにする
+    PYTHONPATH: /opt/airflow/project
+    # ETL 依存パッケージ（SQLAlchemy・psycopg2 は Airflow に同梱済みのため除外）
+    _PIP_ADDITIONAL_REQUIREMENTS: >-
+      pandas==3.0.3
+      pandera==0.32.0
+      pydantic==2.13.4
+      pydantic-extra-types==2.11.1
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - .:/opt/airflow/project:ro
+    - airflow_logs:/opt/airflow/logs
+  networks:
+    - airflow_internal
+    - batch_network
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+
+services:
+
+  # -----------------------------------------------------------------------
+  # Airflow メタデータ用 PostgreSQL（ETL データとは別）
+  # -----------------------------------------------------------------------
+  airflow-postgres:
+    image: postgres:16
+    container_name: airflow_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    networks:
+      - airflow_internal
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------------
+  # 初期化（DB マイグレーション + 管理者ユーザー作成）
+  # 起動時に1回だけ実行される
+  # -----------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow_init
+    command: >
+      bash -c "
+        airflow db migrate &&
+        airflow users create
+          --username admin
+          --password admin
+          --firstname Admin
+          --lastname User
+          --role Admin
+          --email admin@example.com
+      "
+    restart: "no"
+
+  # -----------------------------------------------------------------------
+  # Airflow Web UI（http://localhost:8080）
+  # -----------------------------------------------------------------------
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # -----------------------------------------------------------------------
+  # Airflow スケジューラー（DAG を監視してタスクを起動する）
+  # -----------------------------------------------------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow_scheduler
+    command: scheduler
+    restart: unless-stopped
+
+networks:
+  airflow_internal:
+  batch_network:
+    external: true  # docker-compose.yml で作成済みのネットワークを共用
+
+volumes:
+  airflow_postgres_data:
+  airflow_logs:
